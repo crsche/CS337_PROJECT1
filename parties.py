@@ -7,6 +7,13 @@ import spacy
 from nltk import download as _nltk_dl
 from nltk.sentiment import SentimentIntensityAnalyzer
 
+RE_SPACES = re.compile(r"\s+")
+RE_CAMEL = re.compile(r"[A-Z][a-z]*|[A-Z]+(?![a-z])|[a-z]+")
+RE_HASHTAGS = re.compile(r"#([A-Za-z][A-Za-z0-9\-]+)")
+RE_AFTER_PARTY = re.compile(r"\bafter\s*party\b")
+RE_STRIP = re.compile(r"[ ,.:;!?\"'()\[\]{}\_/\\]+$")
+
+
 def _ensure_vader():
     try:
         SentimentIntensityAnalyzer()
@@ -22,15 +29,15 @@ def _strip_marks(s):
     out = []
     for w in s.split():
         w = w.strip()
-        if not w:
-            continue
-        if w.lower() == "rt":
+        if not w or w.lower() == "rt":
             continue
         if w[0] in {"@", "#"}:
-            out.append(w) if w.lower().startswith("#best") else None
+            if w.lower().startswith("#best"):
+                out.append(w)
             continue
         out.append(w)
     return " ".join(out)
+
 
 def _norm(s):
     s = s.lower()
@@ -39,55 +46,54 @@ def _norm(s):
     return s
 
 def _split_camel(tag):
-    parts = re.findall(r"[A-Z][a-z]*|[A-Z]+(?![a-z])|[a-z]+", tag)
-    if not parts:
-        return None
-    return " ".join(p.lower() for p in parts)
+    parts = RE_CAMEL.findall(tag)
+    return " ".join(p.lower() for p in parts) if parts else None
+
+
 
 def _hashtag_parties(raw_text):
     out = []
-    for tag in re.findall(r"#([A-Za-z][A-Za-z0-9\-]+)", raw_text):
+    for tag in RE_HASHTAGS.findall(raw_text):
         low = tag.lower()
-        if "party" in low:
-            s = _split_camel(tag) or low
-            s = s.replace("-", " ")
-            if "party" in s:
-                out.append(_norm(s))
+        if "party" not in low:
+            continue
+        s = _split_camel(tag) or low
+        s = s.replace("-", " ")
+        if "party" in s:
+            out.append(_norm(s))
     return out
+
 
 def _around_party_phrase(doc):
     names = set()
-
-
-    for i, tok in enumerate(doc):
-        if tok.text.lower() == "party" or tok.lemma_.lower() == "party" or tok.text.lower() == "after-party" or tok.text.lower() == "afterparty":
+    tokens = [(t.text.lower(), t.lemma_.lower(), t.pos_) for t in doc]
+    n = len(tokens)
+    for i, (txt, lem, pos) in enumerate(tokens):
+        if txt in {"party", "after-party", "afterparty"} or lem == "party":
+            # Expand backward and forward
             start = i
-            while start - 1 >= 0 and doc[start - 1].pos_ in {"PROPN", "NOUN", "ADJ"}:
+            while start - 1 >= 0 and tokens[start - 1][2] in {"PROPN", "NOUN", "ADJ"}:
                 start -= 1
             end = i + 1
-            while end < len(doc) and doc[end].pos_ in {"PROPN", "NOUN"}:
+            while end < n and tokens[end][2] in {"PROPN", "NOUN"}:
                 end += 1
             span = _norm(doc[start:end].text)
             if "party" in span:
                 names.add(span)
 
-            at_idx = None
-            for j in range(max(0, i - 5), min(len(doc), i + 6)):
-                if doc[j].text.lower() == "at":
-                    at_idx = j
+            # Find "at" phrases
+            for j in range(max(0, i - 5), min(n, i + 6)):
+                if tokens[j][0] == "at":
+                    s = j + 1
+                    e = s
+                    while e < n and tokens[e][2] in {"PROPN", "NOUN"}:
+                        e += 1
+                    span2 = _norm(doc[s:e].text + " party")
+                    if "party" in span2 and len(doc[s:e]):
+                        names.add(span2)
                     break
-            if at_idx is not None:
-                s = at_idx + 1
-                e = s
-
-
-
-                while e < len(doc) and doc[e].pos_ in {"PROPN", "NOUN"}:
-                    e += 1
-                span2 = _norm(doc[s:e].text + " party")
-                if "party" in span2 and len(doc[s:e]):
-                    names.add(span2)
     return list(names)
+
 
 
 def _ner_party_brands(doc):
@@ -121,34 +127,21 @@ def _extract_parties(nlp, raw_text):
     return list(dict.fromkeys(out))
 
 def _merge_labels(labels):
-    base = []
-    for s in labels:
-        s = s.replace(" after party", " after party")
-        s = re.sub(r"\s+", " ", s).strip()
-        base.append(s)
+    base = [re.sub(r"\s+", " ", s.replace(" after party", " after party")).strip() for s in labels]
+    counts = Counter(base)
     merged = []
-    for s, c in Counter(base).most_common():
-        placed = False
-        for k in range(len(merged)):
-            a, n = merged[k]
-            if a == s:
-                merged[k][1] += c
-                placed = True
+    for s, c in counts.most_common():
+        for m in merged:
+            a, n = m
+            if (
+                a == s or
+                (a.endswith(" after party") and s.startswith(a[:-12])) or
+                (s.endswith(" after party") and a.startswith(s[:-12]))
+            ):
+                m[1] += c
                 break
-
-            if a.endswith(" after party") and s.startswith(a.replace(" after party", "")) and "party" in s:
-                merged[k][1] += c
-                placed = True
-                break
-
-            if s.endswith(" after party") and a.startswith(s.replace(" after party", "")) and "party" in a:
-                merged[k][1] += c
-                placed = True
-                break
-
-        if not placed:
+        else:
             merged.append([s, c])
-
     merged.sort(key=lambda x: x[1], reverse=True)
     return merged
 
