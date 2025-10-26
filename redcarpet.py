@@ -1,155 +1,128 @@
 import re
-import nltk
-import numpy as np
 import json
-from nltk.tokenize import word_tokenize
-from nltk.tag import pos_tag
 import sys
-
-from collections import Counter
-from fuzzywuzzy import fuzz
 import spacy
 
-def remove_symbols(a_tweet):
-    entity_prefixes = ['@','#']
-    words = []
-    for word in a_tweet.split():
-        word = word.strip()
-        if word:
-            if word[0].lower() not in entity_prefixes:
-                words.append(word)
-    return ' '.join(words)
 
-def noisefilter(tweet):
-	ban_list = ['rt','golden','globes']
-	for i in ban_list:
-		tweet = tweet.replace(i,'')
-	return tweet
 
-def sortbypositivity(element):
-	return element[1]
 
-def sortbynegativity(element):
-	return element[2]
+def _strip_handles(s):
+    out = []
+    for w in s.split():
+        w = w.strip()
+        
+        if not w:
+            continue
+        if w.lower() == "rt":
+            continue
+        if w[0] in {"@", "#"}:
+            continue
+        out.append(w)
+    return " ".join(out)
 
-def sortbypolarity(element):
-	return element[3]
+def _denoise(s):
+    for bad in ("rt", "golden", "globes"):
+        s = s.replace(bad, "")
+    return s
+
+def _person_pairs(doc):
+    names = []
+    for ent in doc.ents:
+        if ent.label_ != "PERSON":
+            continue
+        txt = ent.text.strip()
+        if not txt:
+            continue
+        parts = txt.split()
+        if len(parts) < 2:
+            continue
+        cand = " ".join(parts[:2])
+        if cand.replace(" ", "").isalpha():
+            names.append(cand)
+    return names
+
+
+
+def _score_list(d):
+    rows = []
+    for k, (pos, neg) in d.items():
+        tot = pos + neg
+        if tot == 0:
+            continue
+        pol = abs(pos / tot - 0.5)
+        rows.append([k, pos, neg, pol])
+    rows = [r for r in rows if not (r[1] < 5 and r[2] < 5)]
+    return rows
+
+def _top_n(seq, key, n=5, reverse=True):
+    seq.sort(key=key, reverse=reverse)
+    head = [r[0] for r in seq[:n]]
+    return head, (seq[0][1], seq[0][2]) if seq else (0, 0)
 
 def run_redcarpet(year):
-	nlp = spacy.load("en_core_web_sm")
-	with open('gg' + str(year) + '.json') as jsonfile:
-		data = json.load(jsonfile)
-	worstre = 'worst dressed'
-	bestre = 'best dressed'
-	wtweets = []
-	btweets = []
+    nlp = spacy.load("en_core_web_sm")
+    with open(f"gg{year}.json", encoding="utf-8") as f:
+        data = json.load(f)
 
-	tweets = data
-	for i in tweets:
-		tweet = remove_symbols(i['text'].lower())
-		worstresult = re.search(worstre, tweet)
-		bestresult = re.search(bestre, tweet)
-		if worstresult and bestresult:
-			continue
-		elif worstresult:
-			wtweets.append(noisefilter(tweet))
-		elif bestresult:
-			btweets.append(noisefilter(tweet))
+    bt, wt = [], []
+    for it in data:
+        t = _strip_handles(it.get("text", "").lower())
+        if not t:
+            continue
+        has_best = "best dressed" in t
+        has_worst = "worst dressed" in t
+        if has_best and has_worst:
+            continue
+        if has_best:
+            bt.append(_denoise(t))
+        elif has_worst:
+            wt.append(_denoise(t))
 
-	dress_score_dict = {}
-	#format for values will be [bestcount, worstcount]
-	for i in wtweets:
-		result = nlp(i)
-		pair_flag = False
-		person_name = ''
-		for token in result:
-			if token.ent_type_ == "PERSON" and pair_flag == False:
-				pair_flag = True
-				person_name = token.text + ' '
-			elif token.ent_type_ == "PERSON" and pair_flag == True:
-				pair_flag = False
-				person_name += token.text
-				if not (person_name.replace(' ','').isalpha()):
-					continue
-				if person_name not in dress_score_dict.keys():
-					dress_score_dict[person_name] = [0,1]
-				else:
-					dress_score_dict[person_name][1] += 1
-	for i in btweets:
-		result = nlp(i)
-		pair_flag = False
-		person_name = ''
-		for token in result:
-			if token.ent_type_ == "PERSON" and pair_flag == False:
-				pair_flag = True
-				person_name = token.text + ' '
-			elif token.ent_type_ == "PERSON" and pair_flag == True:
-				pair_flag = False
-				person_name += token.text
-				if not (person_name.replace(' ','').isalpha()):
-					continue
-				if person_name not in dress_score_dict.keys():
-					dress_score_dict[person_name] = [1,0]
-				else:
-					dress_score_dict[person_name][0] += 1
+    tally = {}
+    for tw in wt:
+        for name in _person_pairs(nlp(tw)):
+            if name not in tally:
+                tally[name] = [0, 0]
+            tally[name][1] += 1
+    for tw in bt:
+        for name in _person_pairs(nlp(tw)):
+            if name not in tally:
+                tally[name] = [0, 0]
+            tally[name][0] += 1
 
-	dress_score_list = []
-	for i in dress_score_dict.keys():
-		key = i
-		polarity = abs(dress_score_dict[i][0]/(dress_score_dict[i][0] + dress_score_dict[i][1]) - 0.5)
-		positivity = dress_score_dict[i][0]
-		negativity = dress_score_dict[i][1]
-		dress_score_list.append([key,positivity,negativity,polarity])
+    table = _score_list(tally)
 
-	dress_score_list_copy = dress_score_list
+    best_list, best_votes = _top_n(table[:], key=lambda r: r[1], n=5, reverse=True)
+    worst_list, worst_votes = _top_n(table[:], key=lambda r: r[2], n=5, reverse=True)
+    controversial_list, controversy = _top_n(table[:], key=lambda r: r[3], n=5, reverse=False)
 
-	dress_score_list = []
-	for i in dress_score_list_copy:
-		if not (i[1] < 5 and i[2] < 5):
-			dress_score_list.append(i)
-	
-	dress_score_list.sort(key=sortbypositivity,reverse=True)
-	best_votes = dress_score_list[0][1]
-	best_dressed = []
-	for i in dress_score_list:
-		best_dressed.append(i[0])
-		if len(best_dressed) >= 5:
-			break
+    y = str(year)
+    print(f"The five best dressed of the {y} Golden Globes were:")
+    for i, name in enumerate(best_list[:5], 1):
+        print(f"{i}. {name}")
+    if best_list:
+        print(f"The single best dressed red carpeter was {best_list[0]} with {best_votes[0]} votes for best dressed.")
+    else:
+        print("The single best dressed red carpeter was NA with 0 votes for best dressed.")
+    print("")
 
-	dress_score_list.sort(key=sortbynegativity,reverse=True)
-	worst_votes = dress_score_list[0][2]
-	worst_dressed = []
-	for i in dress_score_list:
-		worst_dressed.append(i[0])
-		if len(worst_dressed) >= 5:
-			break
+    print(f"The five worst dressed of the {y} Golden Globes were:")
+    for i, name in enumerate(worst_list[:5], 1):
+        print(f"{i}. {name}")
+    if worst_list:
+        print(f"The single worst dressed red carpeter was {worst_list[0]} with {worst_votes[1]} votes for worst dressed.")
+    else:
+        print("The single worst dressed red carpeter was NA with 0 votes for worst dressed.")
+    print("")
 
-	dress_score_list.sort(key=sortbypolarity)
-	controversial_ratio = [dress_score_list[0][1],dress_score_list[0][2]]
-	most_controversial = []
-	for i in dress_score_list:
-		most_controversial.append(i[0])
-		if len(most_controversial) >= 5:
-			break
-
-	print("The five best dressed of the " + year + " Golden Globes were:")
-	for i in range(5):
-		print(str(i + 1) + ". " + best_dressed[i])
-	print("The single best dressed red carpeter was " + best_dressed[0] + " with " + str(best_votes) + " votes for best dressed.")
-	print('')
-
-	print("The five worst dressed of the " + year + " Golden Globes were:")
-	for i in range(5):
-		print(str(i + 1) + ". " + worst_dressed[i])
-	print("The single worst dressed red carpeter was " + worst_dressed[0] + " with " + str(worst_votes) + " votes for worst dressed.")
-	print('')
-
-	print("The five most controversial red carpeters of the " + year + " Golden Globes were:")
-	for i in range(5):
-		print(str(i + 1) + ". " + most_controversial[i])
-	print("The most controversial red carpeter was " + most_controversial[0] + " with " + str(controversial_ratio[0]) + " votes for best dressed and " + str(controversial_ratio[1]) + " votes for worst dressed.")
-	print('')
-
+    print(f"The five most controversial red carpeters of the {y} Golden Globes were:")
+    for i, name in enumerate(controversial_list[:5], 1):
+        print(f"{i}. {name}")
+    if controversial_list:
+        print(f"The most controversial red carpeter was {controversial_list[0]} with {controversy[0]} votes for best dressed and {controversy[1]} votes for worst dressed.")
+    else:
+        print("The most controversial red carpeter was NA with 0 votes for best dressed and 0 votes for worst dressed.")
+    print("")
 
 if __name__ == "__main__":
-	result = run_redcarpet(sys.argv[1])
+    run_redcarpet(sys.argv[1] if len(sys.argv) > 1 else "2013")

@@ -1,5 +1,5 @@
 '''
-Version 0.6
+Version 0.7
 Python 3
 '''
 import sys
@@ -201,7 +201,8 @@ def score_unstructured(year, answers, info_type):
     return spelling_score, c_score
 
 
-def main(years, grading):
+def main(grading):
+    years = ['2013']
     types = ['spelling', 'completeness']
 
     scores = {y: {g: {t:0 for t in types} for g in grading} for y in years}
@@ -222,17 +223,11 @@ def main(years, grading):
     pprint(scores)
 
 if __name__ == '__main__':
-    years = ['2013', '2015']
     grading = ["hosts", "awards", "nominees", "presenters", "winner"]
 
     if len(sys.argv) > 1:
-        if '2013' in sys.argv:
-            years = ['2013']
-        elif '2015' in sys.argv:
-            years = ['2015']
-
         newg = [g for g in grading if g in sys.argv]
         if len(newg) > 0:
             grading = newg
 
-    main(years, grading)
+    main(grading)

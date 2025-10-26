@@ -1,192 +1,261 @@
 import json
 import re
-import string
+from collections import Counter
+
 import spacy
 from spacy.matcher import Matcher
 from fuzzywuzzy import fuzz
-import pandas as pd
-import math
-
 import nltk
-from nltk.tokenize import word_tokenize
-from nltk.tag import pos_tag
 from nltk.corpus import stopwords
 
-# Run the 1st time
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('stopwords')
-# install python-Levenshtein
+
+
+
+
+def _ensure_nltk():
+    try:
+        needed = [
+            ("punkt", "tokenizers/punkt"),
+            ("punkt_tab", "tokenizers/punkt_tab"),
+            ("averaged_perceptron_tagger", "taggers/averaged_perceptron_tagger"),
+            ("averaged_perceptron_tagger_eng", "taggers/averaged_perceptron_tagger_eng"),
+            ("stopwords", "corpora/stopwords"),
+        ]
+        for pkg, path in needed:
+            try:
+                nltk.data.find(path)
+            except LookupError:
+                nltk.download(pkg, quiet=True)
+    except Exception:
+        pass
+
+
+_ensure_nltk()
+
+
+
 
 def get_tweet_data(year):
-    # load tweet data
-    file_string = 'gg' + str(year) + '.json'
-    tweets = {}
-    with open(file_string, 'r') as f:
-        tweets = json.load(f)
-    
-    # extract 'text' field from tweets
-    tweets = [tweet['text'] for tweet in tweets]
-    # tweets = [tweet['text'] for tweet in tweets if 'best' in tweet['text'].lower()]
-    
-    # remove @,# tokens
-    tweets = [remove_symbols(tweet) for tweet in tweets]
-    
-    return tweets
+    path = f"gg{year}.json"
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
 
-def remove_symbols(a_tweet):
-    entity_prefixes = ['@','#','(',')']
-    words = []
-    for word in a_tweet.split():
-        word = word.strip()
-        if word and word.lower() != 'rt':
-            if word[0].lower() not in entity_prefixes:
-                words.append(word)
-    return ' '.join(words)
+    texts = [t.get("text", "") for t in raw]
+
+    cleaned = []
+    for tw in texts:
+        bits = []
+        for w in tw.split():
+            w = w.strip()
+            if not w:
+                continue
+            if w.lower() == "rt":
+                continue
+            if w[0] in {"@", "#"}:
+                continue
+            bits.append(w)
+        cleaned.append(" ".join(bits))
+
+    return cleaned
+
+
+
+
+def _safe_stopwords():
+    try:
+        return set(stopwords.words("english"))
+    except LookupError:
+        return {"the", "and", "of", "to", "a", "in", "for", "on", "with", "by", "from"}
+
+
+def _simple_word_tokens(text):
+    return re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", text.lower())
+
+
+
 
 def tweets_contain(category_name, tweets):
-    stop_words = set(stopwords.words('english'))
-    stop_words.add('-')
-    stop_words.add('performance')
-    stop_words.add('comedy')
-    stop_words.add('television')
+    sw = _safe_stopwords().union({"-", "performance", "comedy", "television"})
+    toks = [t for t in _simple_word_tokens(category_name) if t not in sw]
 
-    tokens = nltk.word_tokenize(category_name)
-    no_stop_words = [w for w in tokens if not w in stop_words] 
-    
-    regex = r''
-    for token in no_stop_words:
-        regex += token
-        regex += '.*?'
-        
-    # regex = category_name
-    r = re.compile(regex, re.IGNORECASE)
-    filtered_list = list(filter(r.search, tweets))
-    
-    if 'act' not in category_name:
-        filtered_list = [x for x in filtered_list if 'act' not in x.lower()]
-    
-    return filtered_list
+    if not toks:
+        return []
+
+    patt = ".*?".join(map(re.escape, toks))
+    rx = re.compile(patt, re.IGNORECASE)
+
+    hits = [t for t in tweets if rx.search(t)]
+
+    if "act" not in category_name.lower():
+        hits = [x for x in hits if "act" not in x.lower()]
+
+    return hits
+
+
+
 
 def get_NNP(tweets_list):
-    NNP_dict = {}
-    for tweet in tweets_list:
-        tokens = nltk.word_tokenize(tweet)
-        tags = nltk.pos_tag(tokens)
-        for word in tags:
-            if word[1] in ['NNP']:
-                name = word[0].lower()
-                if name in NNP_dict:
-                    NNP_dict[name] += 1
-                else:
-                    NNP_dict[name] = 1
-    return NNP_dict
+    counter = Counter()
+    for tw in tweets_list:
+        toks = _simple_word_tokens(tw)
+        try:
+            pos = nltk.pos_tag(toks)
+            for w, tag in pos:
+                if tag in ("NNP", "NNPS"):
+                    counter[w.lower()] += 1
+        except LookupError:
+            pass
+    return dict(counter)
 
-def get_top_percent(dictionary, percentile):
-    if dictionary == {}:
+
+
+
+def count_name_mentions(tweets, candidates, fuzzy=False, min_ratio=90):
+    counts = {c: 0 for c in candidates}
+    for t in tweets:
+        tl = t.lower()
+        for c in candidates:
+            cl = c.lower()
+            if fuzzy:
+                if fuzz.partial_ratio(cl, tl) >= min_ratio:
+                    counts[c] += 1
+            else:
+                if cl in tl:
+                    counts[c] += 1
+    return counts
+
+
+
+
+def get_person_names(tweets, nlp):
+    names = set()
+
+    m = Matcher(nlp.vocab)
+    pat = [{"POS": "PROPN"}, {"POS": "PROPN", "OP": "?"}]
+    try:
+        m.add("FULL_NAME", [pat])
+    except TypeError:
+        m.add("FULL_NAME", None, pat)
+
+    for t in tweets:
+        doc = nlp(t)
+
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":
+                names.add(ent.text)
+
+        for _, s, e in m(doc):
+            names.add(doc[s:e].text)
+
+    return list(names)
+
+
+
+
+def remove_category_tokens(category, counts_dict):
+    toks = _simple_word_tokens(category)
+    toks += ["motion", "picture", "golden", "globes", "television", "series", "tv", "mini", "rt"]
+
+    sw = _safe_stopwords()
+    toks = [w for w in toks if w not in sw]
+
+    for t in toks:
+        for k in list(counts_dict.keys()):
+            if t in k.lower():
+                counts_dict[k] = 0
+
+    return counts_dict
+
+
+
+
+def get_top_percent(counts_dict, percentile):
+    if not counts_dict:
         return []
-    max_val = max(dictionary.values())
-    threshold = max_val * percentile
-    result = []
-    for key in dictionary:
-        if dictionary[key] > threshold:
-            result.append(key)
-    return result
+    mx = max(counts_dict.values()) if counts_dict else 0
+    if mx <= 0:
+        return []
+    th = mx * percentile
+    return [k for k, v in counts_dict.items() if v > th]
 
-def remove_category_tokens(category, pronouns_dict):
-    tokens = nltk.word_tokenize(category)
-    tokens += ['motion picture', 'golden', 'globes', 'television series', 'tv series', 'mini-', 'rt', '⁰', '-series']
-    
-    stop_words = set(stopwords.words('english'))
-    tokens = [w for w in tokens if not w in stop_words] 
-    
-    for token in tokens:
-        for key in pronouns_dict:
-            if token in key:
-                pronouns_dict[key] = 0
-    return pronouns_dict
+
+
 
 def get_category_nominees(category, tweets, nlp):
-    # filter for tweets which contain the category name regex
-    category_tweets = tweets_contain(category, tweets)
+    cat_tweets = tweets_contain(category, tweets)
 
-    # create a dictionary of person names/film titles
-    if 'actor' in category or 'actress' in category:
-        pronouns_dictionary = get_person_names(category_tweets, nlp)
-        # pronouns_dictionary = get_NNP(category_tweets)
+    if ("actor" in category.lower()) or ("actress" in category.lower()):
+        cands = get_person_names(cat_tweets, nlp)
+        counts = count_name_mentions(cat_tweets, cands, fuzzy=False, min_ratio=90)
     else:
-        # pronouns_dictionary = get_person_names(category_tweets, nlp)
-        pronouns_dictionary = get_NNP(category_tweets)
+        counts = get_NNP(cat_tweets)
 
-    # remove tokens contained in the category name
-    filtered_category_tweets = remove_category_tokens(category, pronouns_dictionary)
+    counts = remove_category_tokens(category, counts)
+    noms = get_top_percent(counts, percentile=0.85)
+    return noms
 
-    # get pronouns with >some_percentile frequency 
-    category_nominees = get_top_percent(filtered_category_tweets, percentile=0.85)
-    
-    return category_nominees
+
+
+
+AWARD_NAMES = [
+    'cecil b. demille award', 'best motion picture - drama',
+    'best performance by an actress in a motion picture - drama',
+    'best performance by an actor in a motion picture - drama',
+    'best motion picture - comedy or musical',
+    'best performance by an actress in a motion picture - comedy or musical',
+    'best performance by an actor in a motion picture - comedy or musical',
+    'best animated feature film', 'best foreign language film',
+    'best performance by an actress in a supporting role in a motion picture',
+    'best performance by an actor in a supporting role in a motion picture',
+    'best director - motion picture', 'best screenplay - motion picture',
+    'best original score - motion picture', 'best original song - motion picture',
+    'best television series - drama',
+    'best performance by an actress in a television series - drama',
+    'best performance by an actor in a television series - drama',
+    'best television series - comedy or musical',
+    'best performance by an actress in a television series - comedy or musical',
+    'best performance by an actor in a television series - comedy or musical',
+    'best mini-series or motion picture made for television',
+    'best performance by an actress in a mini-series or motion picture made for television',
+    'best performance by an actor in a mini-series or motion picture made for television',
+    'best performance by an actress in a supporting role in a series, mini-series or motion picture made for television',
+    'best performance by an actor in a supporting role in a series, mini-series or motion picture made for television'
+]
+
+
+
 
 def run_winners(year):
     tweets = get_tweet_data(year)
-    
-    seperator = ' '
-    nominees = {}
-    OFFICIAL_AWARDS_1315 = ['cecil b. demille award', 'best motion picture - drama', 'best performance by an actress in a motion picture - drama', 'best performance by an actor in a motion picture - drama', 'best motion picture - comedy or musical', 'best performance by an actress in a motion picture - comedy or musical', 'best performance by an actor in a motion picture - comedy or musical', 'best animated feature film', 'best foreign language film', 'best performance by an actress in a supporting role in a motion picture', 'best performance by an actor in a supporting role in a motion picture', 'best director - motion picture', 'best screenplay - motion picture', 'best original score - motion picture', 'best original song - motion picture', 'best television series - drama', 'best performance by an actress in a television series - drama', 'best performance by an actor in a television series - drama', 'best television series - comedy or musical', 'best performance by an actress in a television series - comedy or musical', 'best performance by an actor in a television series - comedy or musical', 'best mini-series or motion picture made for television', 'best performance by an actress in a mini-series or motion picture made for television', 'best performance by an actor in a mini-series or motion picture made for television', 'best performance by an actress in a supporting role in a series, mini-series or motion picture made for television', 'best performance by an actor in a supporting role in a series, mini-series or motion picture made for television']
-    OFFICIAL_AWARDS_1819 = ['best motion picture - drama', 'best motion picture - musical or comedy', 'best performance by an actress in a motion picture - drama', 'best performance by an actor in a motion picture - drama', 'best performance by an actress in a motion picture - musical or comedy', 'best performance by an actor in a motion picture - musical or comedy', 'best performance by an actress in a supporting role in any motion picture', 'best performance by an actor in a supporting role in any motion picture', 'best director - motion picture', 'best screenplay - motion picture', 'best motion picture - animated', 'best motion picture - foreign language', 'best original score - motion picture', 'best original song - motion picture', 'best television series - drama', 'best television series - musical or comedy', 'best television limited series or motion picture made for television', 'best performance by an actress in a limited series or a motion picture made for television', 'best performance by an actor in a limited series or a motion picture made for television', 'best performance by an actress in a television series - drama', 'best performance by an actor in a television series - drama', 'best performance by an actress in a television series - musical or comedy', 'best performance by an actor in a television series - musical or comedy', 'best performance by an actress in a supporting role in a series, limited series or motion picture made for television', 'best performance by an actor in a supporting role in a series, limited series or motion picture made for television', 'cecil b. demille award']
 
-    if year in [2013, 2015, '2013', '2015']:
-        categories = OFFICIAL_AWARDS_1315
-    else:
-        categories = OFFICIAL_AWARDS_1819
-    
-    nlp = spacy.load('en_core_web_sm')
-    for category_name in categories:
-        category_nominees_list = get_category_nominees(category_name, tweets, nlp)
-        category_nominees_string = seperator.join(category_nominees_list)
-        # if not any(x in category_name for x in ['act', 'director', 'cecil']):
-        #     category_nominees_string = find_movie_title(category_nominees_string, year, category_name, nlp)
-        nominees[category_name] = category_nominees_string
-        # print(category_name, ':', category_nominees_string)
-    return nominees
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except Exception:
+        try:
+            from spacy.cli import download
+            download("en_core_web_sm")
+            nlp = spacy.load("en_core_web_sm")
+        except Exception as e:
+            raise RuntimeError("spaCy model 'en_core_web_sm' not available.") from e
+
+    if str(year) in {"2013"}:
+        categories = AWARD_NAMES
+
+    out = {}
+    sep = " "
+
+    for cat in categories:
+        picks = get_category_nominees(cat, tweets, nlp)
+        out[cat] = sep.join(picks)
+
+    return out
 
 
-def get_person_names(list_of_tweets, nlp):
-    '''
-    Input: a list of strings
-    Returns: a dictionary where keys = actor/actress names, values = number of times the key is references in the list of tweets
-    '''
-    names_dictionary = {}
 
-    matcher = Matcher(nlp.vocab)
-    pattern = [{'POS': 'PROPN'}, {'POS': 'PROPN'}]
-    matcher.add('FULL_NAME', None, pattern)
 
-    counter = 0
-    l = len(list_of_tweets)
-    m = math.floor(l / 1000) + 1
-
-    for tweet in list_of_tweets:
-        counter += 1
-
-        if counter % m != 0:
-            continue
-        
-        nlp_doc = nlp(tweet)
-        matches = matcher(nlp_doc)
-        names = None
-        for match_id, start, end in matches:
-            span = nlp_doc[start:end]
-            names = [span.text]
-
-            name = names[0].lower()
-            if name in names_dictionary:
-                names_dictionary[name] += 1
-            else:
-                names_dictionary[name] = 1
-            break
-
-    return names_dictionary
-
-def get_person(tweet):
-    words = [(ent.text, ent.label_) for ent in tweet.ents]
-    return ([token[0] for token in list(filter(lambda x: "PERSON" in x, words))])
+if __name__ == "__main__":
+    import sys
+    y = sys.argv[1] if len(sys.argv) > 1 else "2013"
+    res = run_winners(y)
+    for k, v in res.items():
+        print(f"{k}: {v}")
