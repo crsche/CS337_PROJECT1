@@ -1,0 +1,52 @@
+Category: cecil b. demille award
+Nominees: ['el premio', 'l', 'l', 'l'] 
+Category: best motion picture - drama
+Nominees: ['homeland', "'argo'", 'l', 'l'] 
+Category: best performance by an actress in a motion picture - drama
+Nominees: ['ps-', 'l', 'l', 'l'] 
+Category: best performance by an actor in a motion picture - drama
+Nominees: ['mr. president', 'l', 'l', 'l'] 
+Category: best motion picture - comedy or musical
+Nominees: ['miserables', 'les', 'les miserables', 'l'] 
+Category: best performance by an actress in a motion picture - comedy or musical
+Nominees: ['live blog', 'meryl streep', 'l', 'l'] 
+Category: best performance by an actor in a motion picture - comedy or musical
+Nominees: ['hugh', 'l', 'l', 'l'] 
+Category: best animated feature film
+Nominees: ['brave', 'l', 'l', 'l'] 
+Category: best foreign language film
+Nominees: ['amour', "'amour'", 'amour', 'l'] 
+Category: best performance by an actress in a supporting role in a motion picture
+Nominees: ['downton abbey', 'maggie smith', 'les miserables well', 'maggie smith - best performance'] 
+Category: best performance by an actor in a supporting role in a motion picture
+Nominees: ['christoph waltz - best performance', 'django unchained', 'waltz', 'christoph waltz'] 
+Category: best director - motion picture
+Nominees: ["'argo'", 'l', 'l', 'l'] 
+Category: best screenplay - motion picture
+Nominees: ['django unchained', 'quentin tarantino - django unchained', 's/o quentin tarantino', 'django" quentin tarantino'] 
+Category: best original score - motion picture
+Nominees: ['life of pi - mychael danna', 'life of pi', '"life of pi"', '"life of pi'] 
+Category: best original song - motion picture
+Nominees: ['skyfall', 'skyfall', 'skyfall', "adele's"] 
+Category: best television series - drama
+Nominees: ['homeland', "'argo'", 'l', 'l'] 
+Category: best performance by an actress in a television series - drama
+Nominees: ['ps-', 'l', 'l', 'l'] 
+Category: best performance by an actor in a television series - drama
+Nominees: ['mr. president', 'l', 'l', 'l'] 
+Category: best television series - comedy or musical
+Nominees: ['miserables', 'les', 'les miserables', 'l'] 
+Category: best performance by an actress in a television series - comedy or musical
+Nominees: ['live blog', 'meryl streep', 'l', 'l'] 
+Category: best performance by an actor in a television series - comedy or musical
+Nominees: ['hugh', 'l', 'l', 'l'] 
+Category: best mini-series or motion picture made for television
+Nominees: ['game change', 'l', 'l', 'l'] 
+Category: best performance by an actress in a mini-series or motion picture made for television
+Nominees: ['downton abbey', 'julianne moore', 'maggie smith', 'nicole kidman'] 
+Category: best performance by an actor in a mini-series or motion picture made for television
+Nominees: ['best actor', 'kevinnnn costner', 'kevin costner', 'costner hatfields'] 
+Category: best performance by an actress in a supporting role in a series, mini-series or motion picture made for television
+Nominees: ['downton abbey', 'maggie smith', 'maggie smith - best performance', 'best actress'] 
+Category: best performance by an actor in a supporting role in a series, mini-series or motion picture made for television
+Nominees: ['l', 'l', 'l', 'l'] 

@@ -11,93 +11,95 @@ from fuzzywuzzy import process, fuzz
 from collections import Counter
 from spacy.matcher import Matcher
 
+# Precompile regex patterns once at module level
+URL_RE = re.compile(r'https?://\S+|www\.\S+')
+AMP_RE = re.compile(r'&amp;')
+EMOJI_RE = re.compile(r'[\u2600-\u27BF\u1F300-\u1F6FF\u1F900-\u1F9FF]+')
+SPACE_RE = re.compile(r'\s+')
+
+DROP_SYMBOLS = {'@', '#'}
 
 def remove_symbols(t):
-    drop = {'@', '#'}
-    out = []
-    for w in t.split():
-        w = w.strip()
-        if not w:
-            continue
-        if w.lower() == 'rt':
-            continue
-        if w[0].lower() in drop:
-            continue
-        out.append(w)
-    return ' '.join(out)
+    # use list comprehension for speed
+    words = [
+        w for w in t.split()
+        if w and w.lower() != 'rt' and w[0] not in DROP_SYMBOLS
+    ]
+    return ' '.join(words)
 
 def normalize_text(t):
-    t = re.sub(r'https?://\S+|www\.\S+', '', t)
-    t = re.sub(r'&amp;', '&', t)
-    t = re.sub(r'[\u2600-\u27BF\u1F300-\u1F6FF\u1F900-\u1F9FF]+', ' ', t)
-    t = re.sub(r'\s+', ' ', t).strip()
+    # apply precompiled regexes
+    t = URL_RE.sub('', t)
+    t = AMP_RE.sub('&', t)
+    t = EMOJI_RE.sub(' ', t)
+    t = SPACE_RE.sub(' ', t).strip()
     return t
+
 
 def get_tweet_data(year):
     path = f'gg{year}.json'
     with open(path, 'r', encoding='utf-8') as f:
         raw = json.load(f)
-    texts = [normalize_text(remove_symbols(x.get('text', ''))) for x in raw]
-    return pd.DataFrame(texts, columns=['text'])
 
+    # Combine cleaning steps inline for efficiency
+    def clean_text(x):
+        t = x.get('text', '')
+        t = remove_symbols(t)
+        return normalize_text(t)
 
+    texts = [clean_text(x) for x in raw]
+    return pd.DataFrame({'text': texts})
+
+_PUNCT_TABLE = str.maketrans('', '', r'''!()-[]{};:'"\,<>./?@#$%^&*_~''')
 
 def removePunctuation(s):
-    s = s.replace("...", " ")
-    table = str.maketrans('', '', r'''!()-[]{};:'"\,<>./?@#$%^&*_~''')
-    return s.translate(table)
+    return s.replace("...", " ").translate(_PUNCT_TABLE)
+
 
 def index_tweet(tweet, word):
-    t = removePunctuation(tweet).lower().split()
-    w = removePunctuation(word).lower()
+    clean_tweet = removePunctuation(tweet).lower().split()
+    clean_word = removePunctuation(word).lower()
     try:
-        return t.index(w)
+        return clean_tweet.index(clean_word)
     except ValueError:
         return -1
 
+BADBITS = {'rt', 'best', 'award', 'golden', 'globes', 'globe'}
+
 def filter_names(name_lst):
-    badbits = {'rt', 'best', 'award', 'golden', 'globes', 'globe'}
     res = []
     for name in name_lst:
         n = name.strip()
         if not n:
             continue
         n = n.replace('Jr.', '').strip()
-        if any(b in n.lower().split() for b in badbits):
+        words = n.lower().split()
+        if any(b in words for b in BADBITS):
             continue
-        if len(n.split()) >= 2:
+        if len(words) >= 2:
             res.append(n)
     return res
 
 def compute_mode(names, k=2):
-    out = []
+    if not names:
+        return []
     counts = Counter(names)
-    if not counts:
-        return out
-    top = counts.most_common()
-    if not top:
-        return out
-    maxc = top[0][1]
-    for name, c in top:
-        if len(out) >= k:
-            break
-        if c == maxc or len(out) == 0:
-            out.append(name)
-    return out
+    # Take top k directly
+    return [n for n, _ in counts.most_common(k)]
 
 
 
 def remove_similar_names(names, cutoff=60):
     res = sorted(set(names))
-    for n in list(res):
-        sims = process.extract(n, res)
-        base = sims[0][0]
-        for cand, score in sims[1:]:
-            if base in res and cand in res and score >= cutoff:
-                if cand != base:
-                    res.remove(cand)
-    return res
+    keep = []
+    seen = set()
 
+    for name in res:
+        if any(fuzz.ratio(name, k) >= cutoff for k in keep):
+            continue
+        keep.append(name)
+        seen.add(name)
+    return keep
 
 
 
